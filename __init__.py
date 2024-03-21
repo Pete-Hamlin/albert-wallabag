@@ -1,38 +1,48 @@
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
-from time import sleep
+from time import perf_counter_ns
 from urllib import parse
 
 import requests
 from albert import *
 
-md_iid = "2.1"
-md_version = "2.0"
+
+md_iid = "2.2"
+md_version = "3.0"
 md_name = "Wallabag"
 md_description = "Manage saved articles via a wallabag instance"
 md_license = "MIT"
 md_url = "https://github.com/Pete-Hamlin/albert-python"
-md_maintainers = ["@Pete-Hamlin"]
+md_authors = ["@Pete-Hamlin"]
 md_lib_dependencies = ["requests"]
 
+class ArticleFetcherThread(Thread):
+    def __init__(self, callback, cache_length, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.__stop_event = Event()
+        self.__callback = callback
+        self.__cache_length = cache_length * 60
 
-class Plugin(PluginInstance, GlobalQueryHandler, TriggerQueryHandler):
+    def run(self):
+        # Watch for file changes and re-index
+        while True:
+            self.__callback
+            self.__stop_event.wait(self.__cache_length)
+            if self.__stop_event.is_set():
+                return
+
+    def stop(self):
+        self.__stop_event.set()
+
+
+class Plugin(PluginInstance, IndexQueryHandler):
     iconUrls = [f"file:{Path(__file__).parent}/wallabag.png"]
     limit = 50
     user_agent = "org.albert.wallabag"
 
     def __init__(self):
-        TriggerQueryHandler.__init__(
-            self,
-            id=md_id,
-            name=md_name,
-            description=md_description,
-            synopsis="<article-name>",
-            defaultTrigger="wb ",
-        )
-        GlobalQueryHandler.__init__(self, id=md_id, name=md_name, description=md_description, defaultTrigger="wb ")
+        IndexQueryHandler.__init__(self, id=md_id, name=md_name, description=md_description, synopsis="<article-name>", defaultTrigger="wb ")
         PluginInstance.__init__(self, extensions=[self])
 
         self._instance_url = self.readConfig("instance_url", str) or "http://localhost:80"
@@ -41,21 +51,16 @@ class Plugin(PluginInstance, GlobalQueryHandler, TriggerQueryHandler):
         self._client_id = self.readConfig("client_id", str) or ""
         self._client_secret = self.readConfig("client_secret", str) or ""
 
-        self._cache_results = self.readConfig("cache_results", bool) or True
-        self._cache_length = self.readConfig("cache_length", int) or 60
-        self._auto_cache = self.readConfig("auto_cache", bool) or False
-
-        self.cache_timeout = datetime.now()
-        self.cache_file = self.cacheLocation / "wallabag.json"
-        self.thread_stop = Event()
-        self.cache_thread = Thread(target=self.cache_routine, daemon=True)
-
-        if not self._auto_cache:
-            self.thread_stop.set()
+        self._cache_length = self.readConfig("cache_length", int) or 15
 
         self.token = None
 
-        self.cache_thread.start()
+        self.thread = ArticleFetcherThread(callback=self.updateIndexItems, cache_length=self.cache_length)
+        self.thread.start()
+
+    def finalize(self):
+        self.thread.stop()
+        self.thread.join()
 
     @property
     def instance_url(self):
@@ -103,39 +108,17 @@ class Plugin(PluginInstance, GlobalQueryHandler, TriggerQueryHandler):
         self.writeConfig("client_secret", value)
 
     @property
-    def cache_results(self):
-        return self._cache_results
-
-    @cache_results.setter
-    def cache_results(self, value):
-        self._cache_results = value
-        if not self._cache_results:
-            # Cleanup cache file
-            self.cache_file.unlink(missing_ok=True)
-        self.writeConfig("cache_results", value)
-
-    @property
     def cache_length(self):
         return self._cache_length
 
     @cache_length.setter
     def cache_length(self, value):
         self._cache_length = value
-        self.cache_timeout = datetime.now()
         self.writeConfig("cache_length", value)
 
-    @property
-    def auto_cache(self):
-        return self._auto_cache
-
-    @auto_cache.setter
-    def auto_cache(self, value):
-        self._auto_cache = value
-        if self._auto_cache and self._cache_results:
-            self.thread_stop.clear()
-        else:
-            self.thread_stop.set()
-        self.writeConfig("auto_cache", value)
+        self.thread.stop()
+        self.thread.join()
+        self.thread = ArticleFetcherThread(target=self.updateIndexItems, cache_length=self.cache_length)
 
     def configWidget(self):
         return [
@@ -154,76 +137,61 @@ class Plugin(PluginInstance, GlobalQueryHandler, TriggerQueryHandler):
                 "label": "Client Secret",
                 "widget_properties": {"echoMode": "Password"},
             },
-            {"type": "checkbox", "property": "cache_results", "label": "Cache results locally"},
             {"type": "spinbox", "property": "cache_length", "label": "Cache length (minutes)"},
-            {"type": "checkbox", "property": "auto_cache", "label": "Periodically cache articles"},
         ]
 
-    def handleTriggerQuery(self, query):
-        stripped = query.string.strip()
-        if stripped:
-            # avoid spamming server
-            for _ in range(50):
-                sleep(0.01)
-                if not query.isValid:
-                    return
+    def updateIndexItems(self):
+        start = perf_counter_ns()
+        data = self.fetch_results()
+        index_items = []
+        for article in data:
+            filter = self.create_filters(article)
+            item = self.gen_item(article)
+            index_items.append(IndexItem(item=item, string=filter))
+        self.setIndexItems(index_items)
+        info("Indexed {} articles [{:d} ms]".format(len(index_items), (int(perf_counter_ns() - start) // 1000000)))
 
-            data = self.get_results()
-            articles = (item for item in data if stripped in self.create_filters(item))
-            items = [item for item in self.gen_items(articles)]
-            query.add(items)
-        else:
-            query.add(
-                StandardItem(
-                    id=md_id, text=md_name, subtext="Search for an article saved via Wallabag", iconUrls=self.iconUrls
-                )
-            )
-            if self._cache_results:
-                query.add(
-                    StandardItem(
-                        id=md_id,
-                        text="Refresh cache",
-                        subtext="Refresh cached articles",
-                        iconUrls=["xdg:view-refresh"],
-                        actions=[Action("refresh", "Refresh Wallabag cache", lambda: self.refresh_cache())],
-                    )
-                )
+    # def handleTriggerQuery(self, query):
+    #     stripped = query.string.strip()
+    #     if stripped:
+    #         GlobalQueryHandler.handleTriggerQuery(query)
+    #         query.add(
+    #             StandardItem(
+    #                 id=md_id,
+    #                 text="Refresh cache",
+    #                 subtext="Refresh cached articles",
+    #                 iconUrls=["xdg:view-refresh"],
+    #                 actions=[Action("refresh", "Refresh Wallabag index", lambda: self.updateIndexItems())],
+    #             )
+    #         )
+    #     else:
+    #         query.add(
+    #             StandardItem(
+    #                 id=md_id, text=md_name, subtext="Search for an article saved in Wallabag", iconUrls=self.iconUrls
+    #             )
+    #         )
 
-    def handleGlobalQuery(self, query):
-        stripped = query.string.strip()
-        if stripped and self.cache_file.is_file():
-            # If we have results cached display these, otherwise disregard (we don't want to make fetch requests in the global query)
-            data = (item for item in self.read_cache())
-            articles = (item for item in data if stripped in self.create_filters(item))
-            items = [RankItem(item=item, score=0) for item in self.gen_items(articles)]
-            return items
 
     def create_filters(self, item: dict):
         # TODO: Add filter options?
         return ",".join([item["url"], item["title"].lower(), ",".join(tag["label"] for tag in item["tags"])])
 
-    def gen_items(self, articles: object):
-        for article in articles:
-            yield StandardItem(
+    def gen_item(self, article: object):
+            return StandardItem(
                 id=md_id,
                 text=article["title"] or article["url"],
                 subtext="{}".format(",".join(tag["label"] for tag in article["tags"])),
                 iconUrls=self.iconUrls,
                 actions=[
-                    Action("open-url", "Open article URL", lambda u=article["url"]: openUrl(u)),
                     Action(
                         "open",
                         "Open article in wallabag",
                         lambda u="{}/view/{}".format(self._instance_url, article["id"]): openUrl(u),
                     ),
-                    Action("copy", "Copy URL to clipboard", lambda u=article["url"]: setClipboardText(u)),
+                    Action("open-url", "Open article URL", lambda u=article["url"]: openUrl(u)),
+                    Action("copy", "Copy article URL to clipboard", lambda u=article["url"]: setClipboardText(u)),
                 ],
             )
-
-    def get_results(self):
-        if self._cache_results:
-            return self._get_cached_results()
-        return self.fetch_results()
 
     def fetch_results(self):
         headers = {"User-Agent": self.user_agent, "Authorization": f"Bearer {self.get_token()}"}
@@ -243,35 +211,6 @@ class Plugin(PluginInstance, GlobalQueryHandler, TriggerQueryHandler):
                 yield result["_embedded"]["items"]
             else:
                 warning(f"Got response {response.status_code} querying {url}")
-
-    def _get_cached_results(self):
-        if self.cache_file.is_file() and self.cache_timeout >= datetime.now():
-            debug("Cache hit")
-            results = self.read_cache()
-            return (item for item in results)
-        # Cache miss
-        debug("Cache miss")
-        return self.refresh_cache()
-
-    def cache_routine(self):
-        while True:
-            if not self.thread_stop.is_set():
-                self.refresh_cache()
-            sleep(3600)
-
-    def refresh_cache(self):
-        results = self.fetch_results()
-        self.cache_timeout = datetime.now() + timedelta(minutes=self._cache_length)
-        return self.write_cache([item for item in results])
-
-    def read_cache(self):
-        with self.cache_file.open("r") as cache:
-            return json.load(cache)
-
-    def write_cache(self, data: list[dict]):
-        with self.cache_file.open("w") as cache:
-            cache.write(json.dumps(data))
-        return (item for item in data)
 
     def get_token(self):
         if not self.token or not self.token.is_valid():
