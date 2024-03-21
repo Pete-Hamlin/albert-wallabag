@@ -173,14 +173,13 @@ class Plugin(PluginInstance, IndexQueryHandler):
 
 
     def create_filters(self, item: dict):
-        # TODO: Add filter options?
         return ",".join([item["url"], item["title"].lower(), ",".join(tag["label"] for tag in item["tags"])])
 
     def gen_item(self, article: object):
             return StandardItem(
                 id=md_id,
                 text=article["title"] or article["url"],
-                subtext="{}".format(",".join(tag["label"] for tag in article["tags"])),
+                subtext=" - ".join([article["url"], ",".join(tag["label"] for tag in article["tags"])]),
                 iconUrls=self.iconUrls,
                 actions=[
                     Action(
