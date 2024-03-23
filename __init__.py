@@ -18,16 +18,17 @@ md_lib_dependencies = ["requests"]
 
 
 class ArticleFetcherThread(Thread):
-    def __init__(self, callback, *args, **kwargs) -> None:
+    def __init__(self, callback, cache_length, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.__stop_event = Event()
         self.__callback = callback
-        # 15 minutes
-        self.__cache_length = 9000
+        self.__cache_length = cache_length * 60
 
     def run(self):
         while True:
             self.__stop_event.wait(self.__cache_length)
+            if self.__stop_event.is_set():
+                return
             self.__callback()
 
     def stop(self):
@@ -51,9 +52,11 @@ class Plugin(PluginInstance, IndexQueryHandler):
         self._client_id = self.readConfig("client_id", str) or ""
         self._client_secret = self.readConfig("client_secret", str) or ""
 
+        self._cache_length = self.readConfig("cache_length", int) or 15
+
         self._token = None
 
-        self._thread = ArticleFetcherThread(callback=self.updateIndexItems)
+        self._thread = ArticleFetcherThread(callback=self.updateIndexItems, cache_length=15)
         self._thread.start()
 
     def finalize(self):
@@ -105,6 +108,22 @@ class Plugin(PluginInstance, IndexQueryHandler):
         self._client_secret = value
         self.writeConfig("client_secret", value)
 
+    @property
+    def cache_length(self):
+        return self._cache_length
+
+    @cache_length.setter
+    def cache_length(self, value):
+        value = 1 if value < 1 else value
+        self._cache_length = value
+        self.writeConfig("cache_length", value)
+
+        if self._thread.is_alive():
+            self._thread.stop()
+            self._thread.join()
+        self._thread = ArticleFetcherThread(callback=self.updateIndexItems, cache_length=self._cache_length)
+        self._thread.start()
+
     def configWidget(self):
         return [
             {"type": "lineedit", "property": "instance_url", "label": "URL"},
@@ -122,6 +141,7 @@ class Plugin(PluginInstance, IndexQueryHandler):
                 "label": "Client Secret",
                 "widget_properties": {"echoMode": "Password"},
             },
+            {"type": "spinbox", "property": "cache_length", "label": "Cache length (minutes)"},
         ]
 
     def updateIndexItems(self):
