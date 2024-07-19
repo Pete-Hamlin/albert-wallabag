@@ -37,7 +37,7 @@ class ArticleFetcherThread(Thread):
 
 class Plugin(PluginInstance, IndexQueryHandler):
     iconUrls = [f"file:{Path(__file__).parent}/wallabag.png"]
-    limit = 50
+    limit = 250
     user_agent = "org.albert.wallabag"
 
     def __init__(self):
