@@ -7,8 +7,8 @@ from urllib import parse
 import requests
 from albert import *
 
-md_iid = "2.2"
-md_version = "3.1"
+md_iid = "2.3"
+md_version = "3.2"
 md_name = "Wallabag"
 md_description = "Manage saved articles via a wallabag instance"
 md_license = "MIT"
@@ -41,10 +41,10 @@ class Plugin(PluginInstance, IndexQueryHandler):
     user_agent = "org.albert.wallabag"
 
     def __init__(self):
+        PluginInstance.__init__(self)
         IndexQueryHandler.__init__(
-            self, id=md_id, name=md_name, description=md_description, synopsis="<article-name>", defaultTrigger="wb "
+            self, id=self.id, name=self.name, description=self.description, synopsis="<article-name>", defaultTrigger="wb "
         )
-        PluginInstance.__init__(self, extensions=[self])
 
         self._instance_url = self.readConfig("instance_url", str) or "http://localhost:80"
         self._username = self.readConfig("username", str) or ""
@@ -56,10 +56,11 @@ class Plugin(PluginInstance, IndexQueryHandler):
 
         self._token = None
 
-        self._thread = ArticleFetcherThread(callback=self.updateIndexItems, cache_length=15)
+        self.updateIndexItems()
+        self._thread = ArticleFetcherThread(callback=self.updateIndexItems, cache_length=self._cache_length)
         self._thread.start()
 
-    def finalize(self):
+    def __del__(self):
         self._thread.stop()
         self._thread.join()
 
@@ -155,32 +156,30 @@ class Plugin(PluginInstance, IndexQueryHandler):
         self.setIndexItems(index_items)
         info("Indexed {} articles [{:d} ms]".format(len(index_items), (int(perf_counter_ns() - start) // 1000000)))
 
-    # def handleTriggerQuery(self, query):
-    #     stripped = query.string.strip()
-    #     if stripped:
-    #         GlobalQueryHandler.handleTriggerQuery(query)
-    #         query.add(
-    #             StandardItem(
-    #                 id=md_id,
-    #                 text="Refresh cache",
-    #                 subtext="Refresh cached articles",
-    #                 iconUrls=["xdg:view-refresh"],
-    #                 actions=[Action("refresh", "Refresh Wallabag index", lambda: self.updateIndexItems())],
-    #             )
-    #         )
-    #     else:
-    #         query.add(
-    #             StandardItem(
-    #                 id=md_id, text=md_name, subtext="Search for an article saved in Wallabag", iconUrls=self.iconUrls
-    #             )
-    #         )
+    def handleTriggerQuery(self, query):
+        stripped = query.string.strip()
+        if stripped:
+            TriggerQueryHandler.handleTriggerQuery(self, query)
+            query.add(
+                StandardItem(
+                    text="Refresh cache",
+                    subtext="Refresh cached articles",
+                    iconUrls=["xdg:view-refresh"],
+                    actions=[Action("refresh", "Refresh Wallabag index", lambda: self.updateIndexItems())],
+                )
+            )
+        else:
+            query.add(
+                StandardItem(
+                    text=self.name, subtext="Search for an article saved in Wallabag", iconUrls=self.iconUrls
+                )
+            )
 
     def _create_filters(self, item: dict):
         return ",".join([item["url"], item["title"].lower(), ",".join(tag["label"] for tag in item["tags"])])
 
-    def _gen_item(self, article: object):
+    def _gen_item(self, article):
         return StandardItem(
-            id=md_id,
             text=article["title"] or article["url"],
             subtext=" - ".join([article["url"], ",".join(tag["label"] for tag in article["tags"])]),
             iconUrls=self.iconUrls,
@@ -213,6 +212,7 @@ class Plugin(PluginInstance, IndexQueryHandler):
                 yield result["_embedded"]["items"]
             else:
                 warning(f"Got response {response.status_code} querying {url}")
+                break
 
     def _get_token(self):
         if not self._token or not self._token.is_valid():
