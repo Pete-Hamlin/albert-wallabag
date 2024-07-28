@@ -160,20 +160,20 @@ class Plugin(PluginInstance, IndexQueryHandler):
         stripped = query.string.strip()
         if stripped:
             TriggerQueryHandler.handleTriggerQuery(self, query)
-            query.add(
-                StandardItem(
-                    text="Refresh cache",
-                    subtext="Refresh cached articles",
-                    iconUrls=["xdg:view-refresh"],
-                    actions=[Action("refresh", "Refresh Wallabag index", lambda: self.updateIndexItems())],
-                )
-            )
         else:
             query.add(
                 StandardItem(
                     text=self.name, subtext="Search for an article saved in Wallabag", iconUrls=self.iconUrls
                 )
             )
+        query.add(
+            StandardItem(
+                text="Refresh cache",
+                subtext="Refresh cached articles",
+                iconUrls=["xdg:view-refresh"],
+                actions=[Action("refresh", "Refresh Wallabag index", lambda: self.updateIndexItems())],
+            )
+        )
 
     def _create_filters(self, item: dict):
         return ",".join([item["url"], item["title"].lower(), ",".join(tag["label"] for tag in item["tags"])])
