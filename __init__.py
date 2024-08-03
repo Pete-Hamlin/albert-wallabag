@@ -56,7 +56,6 @@ class Plugin(PluginInstance, IndexQueryHandler):
 
         self._token = None
 
-        self.updateIndexItems()
         self._thread = ArticleFetcherThread(callback=self.updateIndexItems, cache_length=self._cache_length)
         self._thread.start()
 
