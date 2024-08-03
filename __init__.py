@@ -8,7 +8,7 @@ import requests
 from albert import *
 
 md_iid = "2.3"
-md_version = "3.2"
+md_version = "3.3"
 md_name = "Wallabag"
 md_description = "Manage saved articles via a wallabag instance"
 md_license = "MIT"
@@ -205,7 +205,11 @@ class Plugin(PluginInstance, IndexQueryHandler):
             page += 1
             params = {"perPage": self.limit, "page": page}
             url = f"{self._instance_url}/api/entries.json?{parse.urlencode(params)}"
-            response = requests.get(url, headers=headers, timeout=5)
+            try:
+                response = requests.get(url, headers=headers, timeout=5)
+            except requests.ConnectionError:
+                warning(f"Unable to establish connection to: {self._instance_url}")
+                break
             if response.ok:
                 result = response.json()
                 pages = int(result["pages"])
@@ -217,26 +221,29 @@ class Plugin(PluginInstance, IndexQueryHandler):
     def _get_token(self):
         if not self._token or not self._token.is_valid():
             self._refresh_token()
-        return self._token.access
+        return self._token.access if self._token else None
 
     def _refresh_token(self):
         url = f"{self._instance_url}/oauth/v2/token"
         debug(f"Fetching token from {url}")
-        response = requests.post(
-            url,
-            data={
-                "grant_type": "password",
-                "client_id": self._client_id,
-                "client_secret": self._client_secret,
-                "username": self._username,
-                "password": self._password,
-            },
-            timeout=5,
-        )
-        if response.ok:
-            self._token = Token(response.json())
-        else:
-            warning(f"Got response: {response.status_code} {response.content}")
+        try:
+            response = requests.post(
+                url,
+                data={
+                    "grant_type": "password",
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "username": self._username,
+                    "password": self._password,
+                },
+                timeout=5,
+            )
+            if response.ok:
+                self._token = Token(response.json())
+            else:
+                warning(f"Got response: {response.status_code} {response.content}")
+        except requests.ConnectionError:
+            warning(f"Unable to establish connection to: {self._instance_url}")
 
 
 class Token:
