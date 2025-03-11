@@ -7,8 +7,8 @@ from urllib import parse
 import requests
 from albert import *
 
-md_iid = "2.3"
-md_version = "3.3"
+md_iid = "3.0"
+md_version = "3.4"
 md_name = "Wallabag"
 md_description = "Manage saved articles via a wallabag instance"
 md_license = "MIT"
@@ -42,9 +42,7 @@ class Plugin(PluginInstance, IndexQueryHandler):
 
     def __init__(self):
         PluginInstance.__init__(self)
-        IndexQueryHandler.__init__(
-            self, id=self.id, name=self.name, description=self.description, synopsis="<article-name>", defaultTrigger="wb "
-        )
+        IndexQueryHandler.__init__(self)
 
         self._instance_url = self.readConfig("instance_url", str) or "http://localhost:80"
         self._username = self.readConfig("username", str) or ""
@@ -62,6 +60,10 @@ class Plugin(PluginInstance, IndexQueryHandler):
     def __del__(self):
         self._thread.stop()
         self._thread.join()
+
+
+    def defaultTrigger(self):
+        return "wb "
 
     @property
     def instance_url(self):
