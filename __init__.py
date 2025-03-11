@@ -164,7 +164,7 @@ class Plugin(PluginInstance, IndexQueryHandler):
         else:
             query.add(
                 StandardItem(
-                    text=self.name, subtext="Search for an article saved in Wallabag", iconUrls=self.iconUrls
+                    text=md_name, subtext="Search for an article saved in Wallabag", iconUrls=self.iconUrls
                 )
             )
         query.add(
