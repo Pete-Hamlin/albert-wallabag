@@ -8,7 +8,7 @@ import requests
 from albert import *
 
 md_iid = "3.0"
-md_version = "3.4"
+md_version = "3.5"
 md_name = "Wallabag"
 md_description = "Manage saved articles via a wallabag instance"
 md_license = "MIT"
@@ -25,6 +25,7 @@ class ArticleFetcherThread(Thread):
         self.__cache_length = cache_length * 60
 
     def run(self):
+        self.__callback()
         while True:
             self.__stop_event.wait(self.__cache_length)
             if self.__stop_event.is_set():
@@ -44,6 +45,8 @@ class Plugin(PluginInstance, IndexQueryHandler):
         PluginInstance.__init__(self)
         IndexQueryHandler.__init__(self)
 
+        self._index_items = []
+
         self._instance_url = self.readConfig("instance_url", str) or "http://localhost:80"
         self._username = self.readConfig("username", str) or ""
         self._password = self.readConfig("password", str) or ""
@@ -54,7 +57,7 @@ class Plugin(PluginInstance, IndexQueryHandler):
 
         self._token = None
 
-        self._thread = ArticleFetcherThread(callback=self.updateIndexItems, cache_length=self._cache_length)
+        self._thread = ArticleFetcherThread(callback=self.fetchIndexItems, cache_length=self._cache_length)
         self._thread.start()
 
     def __del__(self):
@@ -146,16 +149,20 @@ class Plugin(PluginInstance, IndexQueryHandler):
             {"type": "spinbox", "property": "cache_length", "label": "Cache length (minutes)"},
         ]
 
+
     def updateIndexItems(self):
+        self.setIndexItems(self._index_items)
+
+    def fetchIndexItems(self):
         start = perf_counter_ns()
         data = self._fetch_results()
-        index_items = []
         for article in data:
             filter = self._create_filters(article)
             item = self._gen_item(article)
-            index_items.append(IndexItem(item=item, string=filter))
-        self.setIndexItems(index_items)
-        info("Indexed {} articles [{:d} ms]".format(len(index_items), (int(perf_counter_ns() - start) // 1000000)))
+            self._index_items.append(IndexItem(item=item, string=filter))
+        self.updateIndexItems()
+        info("Indexed {} articles [{:d} ms]".format(len(self._index_items), (int(perf_counter_ns() - start) // 1000000)))
+        self._index_items = []
 
     def handleTriggerQuery(self, query):
         stripped = query.string.strip()
